@@ -132,7 +132,8 @@ ggplot(fcast %>% filter(Country == tc)
   geom_line(data = mod %>% filter(Country == tc), aes(x = YEAR, y = Metric, group = Genus)) +
  #facet_wrap(~ Country, scales = "free") + 
     scale_y_log10(limits = c(1,1e8), expand = c(0, 0)) +
-  theme(legend.position = "none") 
+  theme(legend.position = "none") +
+  scale_fil
 ```
 
 ```{r}
