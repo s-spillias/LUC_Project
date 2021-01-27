@@ -23,14 +23,14 @@ library(tsibble)
 library(lubridate)
 library(tis)
 library(ggpubr)
-library(LaCroixColoR)
+#library(LaCroixColoR)
 library(ggsci)
 ```
 
 
 ```{r import FAO Data}
 
-FAO_Data <- read_excel("~/_PhD/Ch3_IIASA Project/FAO_Data.xlsx", 
+FAO_Data <- read_excel("FAO_Data.xlsx", 
     sheet = "Sheet2")
 FAO_Data <- FAO_Data[!is.na(FAO_Data$Header),]
 
@@ -76,7 +76,7 @@ cbPalette <- c("#F00011", "#CC79A7", "#56B4E9", "#F0E442","#009E73", "#0072B2", 
 groups <- read_csv("CL_FI_SPECIES_GROUPS.csv")
 env <- read_csv("CL_FI_ENVIRONMENT.csv")
 country <- read_csv("CL_FI_COUNTRY_GROUPS.csv")
-Rich_Shock_DATA <-  read_xlsx("~/_PhD/Ch3_IIASA Project/Ch4_Stability/Stability_Analysis_Rproject/FAO_MAIN/Rich_Shock_DATA.xlsx")
+Rich_Shock_DATA <-  read_xlsx("Rich_Shock_DATA.xlsx")
 FAO_raw <- read_csv("TS_FI_AQUACULTURE.csv") %>% 
   merge(.,groups, by.x = "SPECIES", by.y = "3Alpha_Code" ) %>% 
   merge(., country, by.x = "COUNTRY", by.y = "UN_Code") %>% 
