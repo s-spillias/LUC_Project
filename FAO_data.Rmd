@@ -1,0 +1,284 @@
+---
+title: "LUC_Project"
+author: "Scott Spillias"
+date: "24/11/2020"
+output: pdf_document
+---
+
+```{r opts, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.path = "images/",
+  dev = c('pdf')
+)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(reshape2)
+library(gam)
+library(forecast)
+library(fable)
+library(tsibble)
+library(lubridate)
+library(tis)
+library(ggpubr)
+library(LaCroixColoR)
+library(ggsci)
+```
+
+
+```{r import FAO Data}
+
+FAO_Data <- read_excel("~/_PhD/Ch3_IIASA Project/FAO_Data.xlsx", 
+    sheet = "Sheet2")
+FAO_Data <- FAO_Data[!is.na(FAO_Data$Header),]
+
+```
+
+```{r Seaweed Report Data}
+lis <- split(FAO_Data,FAO_Data$...1,drop = TRUE)
+lis <- lapply(lis, function(x) x[-1,-1])
+names(lis) <- sapply(sapply(lis, "[[",1),"[",1)
+lis <- lapply(lis, function(x) x[-1,])
+lis <- lapply(lis, function(x) setNames(x, x[1,]))
+lis <- lapply(lis, function(x) x[-1,])
+
+```
+
+```{r}
+# What is the unit price of each end-use? Does it vary across countries? Is this already in the report?
+
+#Weights are in tonnes...DW? FW?
+
+# Big Question: How much seaweed (and what type) will the world (by country) produce in 2050?
+## Use models of uncertainty to estimate? Treat industry as a biological species. Examine growth rates in the context of resources need for growth and survival. 
+## Step One: Calculate growth rates for each country / Fit a model for each country.
+## Step Two: Identify sources of possible variation in each country model.
+```
+
+
+```{r}
+### Set Important Parameters
+# Baseline number of years over which to assign 'median' to compare against
+bsln <- 7
+# Minimum production value below which countries are removed 
+min_production <- 1
+# Percentage loss below which a 'shock occurs'
+perc_thresh <- -0.2
+# Colour Scheme
+cbPalette <- c("#F00011", "#CC79A7", "#56B4E9", "#F0E442","#009E73", "#0072B2", "#E69F00","#D55E00")
+
+```
+
+```{r}
+## IMPORT AND clean DATA
+groups <- read_csv("CL_FI_SPECIES_GROUPS.csv")
+env <- read_csv("CL_FI_ENVIRONMENT.csv")
+country <- read_csv("CL_FI_COUNTRY_GROUPS.csv")
+Rich_Shock_DATA <-  read_xlsx("~/_PhD/Ch3_IIASA Project/Ch4_Stability/Stability_Analysis_Rproject/FAO_MAIN/Rich_Shock_DATA.xlsx")
+FAO_raw <- read_csv("TS_FI_AQUACULTURE.csv") %>% 
+  merge(.,groups, by.x = "SPECIES", by.y = "3Alpha_Code" ) %>% 
+  merge(., country, by.x = "COUNTRY", by.y = "UN_Code") %>% 
+  merge(., Rich_Shock_DATA, unique(Rich_Shock_DATA[,c(2,10,11)]), by.x = "Name_En.y", by.y = "Country", all.x = TRUE) %>% 
+  filter(ENVIRONMENT == "3") %>% 
+  filter(Major_Group == "PLANTAE AQUATICAE") %>% 
+  filter(YEAR > 1970) %>% 
+  mutate(Genus = word(Scientific_Name,1)) %>% 
+  rename(Country = Name_En.y) %>% 
+  select(Country, Genus, YEAR, QUANTITY, VALUE, Region, SubRegion) 
+           
+
+## Rename Russia - More of this may be necessary
+FAO_raw$Country[FAO_raw$Country == "Un. Sov. Soc. Rep."] <- "Russian Federation"
+```
+
+```{r}
+## Group data according to 'Quantity' field, by Year, Genus, and Country
+g_rates <- FAO_raw %>% 
+  select(YEAR, Genus, Country, VALUE, QUANTITY) %>% 
+  group_by(YEAR, Genus, Country) %>% 
+  mutate_at(c("VALUE","QUANTITY"), sum) %>% 
+  distinct()
+
+g_rates[is.na(g_rates)] <- 0
+
+mod <- g_rates %>% select(-VALUE) %>% rename(Metric = QUANTITY) %>% as_tsibble(index = YEAR, key = c("Genus", "Country")) %>% 
+  fill_gaps()
+
+```
+
+
+```{r}
+# Fit models
+fit <- model(mod, TSLM(Metric ~ trend()))
+fit <- mod %>% model(ets = ETS(box_cox(Metric,0.3)))
+# Compute forecasts
+fcast <- forecast(fit, h = "32 years", levels = 5) %>% 
+  arrange(Genus, Country)
+```
+
+
+```{r}
+# Plot forecasts for one series
+tc = "Philippines"
+sp = "Eucheuma"
+
+
+ggplot(fcast %>% filter(Country == tc)
+       ,
+       aes(x=YEAR, y=Metric, fill = Country)) +
+  autolayer(fcast %>% filter(Country == tc), alpha = 0.2, .vars = .mean) +
+  geom_line(data = mod %>% filter(Country == tc), aes(x = YEAR, y = Metric, group = Genus)) +
+ #facet_wrap(~ Country, scales = "free") + 
+    scale_y_log10(limits = c(1,1e8), expand = c(0, 0)) +
+  theme(legend.position = "none") 
+```
+
+```{r}
+fcast_2050 <- fcast %>% filter(YEAR == 2050)
+```
+
+
+```{r}
+##Split countries into separate dataframes of Years by species  
+listdata <- split(main_df, main_df$Country, drop = TRUE) 
+
+listdata_val <- lapply(listdata, function(x) 
+  as.data.frame(
+    dcast(x, YEAR ~ Genus, 
+          value.var = "VALUE", fun.aggregate = sum))) 
+
+listdata_qua <- lapply(listdata, function(x) 
+  as.data.frame(
+    dcast(x, YEAR ~ Genus, 
+          value.var = "QUANTITY", fun.aggregate = sum)))
+```
+
+
+```{r Choose _val or _qua}
+##
+listdata <- listdata_qua
+
+```
+
+```{r}
+#### Remove Unwanted time-series from list of dataframes
+## Remove time-series with fewer non-zero values than baseline (bsln)
+#listdata <- lapply(listdata, function(x) {
+# as.data.frame(x[, unlist((lapply(x, function(y) {sum(y > 0, na.rm = TRUE) #> bsln}))) ] )
+#})
+
+## Remove time-series with low production values; mean is below min_production (specified at start)
+#listdata <- lapply(listdata, function(x) {
+#  as.data.frame(x[, unlist((lapply(x, function(y) {mean(y, na.rm = TRUE) > min_production}))) ] )
+#})
+
+## Remove Countries with 2 or fewer cultivated species and countries with fewer reported years than bsln
+#listdata <- listdata[sapply(listdata, function(x) ncol(x)) > 2]  
+#listdata <- listdata[lapply(listdata, function(x) nrow(x)) > bsln]
+
+```
+
+```{r}
+## In list of dataframes, set Years column to be row.names 
+for (i in 1:length(listdata)) {
+ row.names(listdata[[i]]) = listdata[[i]][,1]}
+
+#listdata <- lapply(listdata, function(x) as.data.frame(x[,-1]))
+```
+
+```{r}
+#### IDENTIFY SHOCKS
+## FIT GAM MODELs 
+
+models_ga <- listdata
+
+models_ga <- lapply(listdata, function(x) {lapply(x, function(a,b)
+  gam(a ~ lo(as.numeric(row.names(b)))),
+  b = x)})
+```
+
+```{r}
+## Fit LOESS Models (if desired)
+models_ls <- listdata
+models_ls <- lapply(listdata, function(x) {lapply(x, function(a,b) 
+  loess(a ~ as.numeric(row.names(b)), 
+        span = 0.6, na.action = "na.omit"), b=x)})
+```
+
+
+
+```{r Time-Series Visualization}
+
+## Visualization of time-series for specific Case Studies
+## ## this can be used to double-check that shocks are well-defined
+## ## tc = Country name ; sp = Genus name
+
+tc <- "China"
+sp <- "Laminaria"
+
+case_y = as.data.frame(
+  cbind(
+    as.numeric(
+     row.names(
+    listdata[[tc]][!is.na(
+       listdata[[tc]][[sp]])
+      ,])
+   )
+  , 
+                    predict(models_ga[[tc]][[sp]] ) ))
+
+names(case_y) <- c("YEAR", "Value")
+
+case_x <- as.data.frame(cbind(as.numeric(row.names(listdata[[tc]][!is.na(listdata[[tc]][[sp]]),])), predict(models_ls[[tc]][[sp]]) ))
+names(case_x) <- c("Year", "Value")
+
+
+p <- ggplot() + 
+  ## GAM Model Fit
+  geom_line(data=case_y, aes(x=YEAR, y=Value), color='blue') + 
+  ## LOESS Model Fit
+  geom_line(data=case_x, aes(x=Year, y=Value), color='orange') + 
+  ## DataPoints
+  geom_line(data = listdata[[tc]], aes(x = as.numeric(row.names(listdata[[tc]])), 
+                                     y = listdata[[tc]][[sp]]), na.rm = T) +
+  xlim(1960,2050)
+p
+```
+
+```{r}
+prediction <- as_tsibble(as.data.frame(cbind(as.numeric(row.names(listdata[[tc]])),                            listdata[[tc]][[sp]])), index = "V1") %>% 
+  rename("Year"= "V1" , "Amount" = "V2") 
+prediction <- prediction %>% 
+  model(
+    #arima = ARIMA(Amount),
+    ets = ETS(box_cox(Amount, 0.3))
+    ) %>%
+  forecast(h = "33 years", level = 5) 
+p + geom_line(data = prediction, aes(x = Year, y = .mean, color = "red"))
+
+growth <-  prediction %>%
+  rename("Value" = ".mean") %>% 
+  select(Year, Value) %>% 
+  # first sort by year
+  arrange(Year) %>%
+  mutate(Diff_year = Year - lag(Year),  # Difference in time (just in case there are gaps)
+         Diff_growth = Value - lag(Value), # Difference in route between years
+         Rate_percent = (Diff_growth / Diff_year)/Value * 100) 
+
+print(mean(growth[-1,]$Rate_percent))
+###Need to get growth rate for each species for each country. Build into list.
+
+```
+
+
+```{r}
+g_rates <- lapply(listdata, function(x) add_column(x, row.names(x), .before = 1)) %>% 
+melt() %>% 
+  rename("Year" = "row.names(x)", "Genus" = "variable", "Country" = "L1", "Value" = "value")  %>% 
+  mutate(Country = as.factor(Country),
+         Year = as.numeric(Year)) 
+  
+
+g_rates <- as.data.frame(g_rates)
