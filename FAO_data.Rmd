@@ -25,6 +25,8 @@ library(tis)
 library(ggpubr)
 #library(LaCroixColoR)
 library(ggsci)
+library(stats)
+library(feasts)
 ```
 
 
@@ -79,7 +81,9 @@ country <- read_csv("CL_FI_COUNTRY_GROUPS.csv")
 Rich_Shock_DATA <-  read_xlsx("Rich_Shock_DATA.xlsx")
 FAO_raw <- read_csv("TS_FI_AQUACULTURE.csv") %>% 
   merge(.,groups, by.x = "SPECIES", by.y = "3Alpha_Code" ) %>% 
-  merge(., country, by.x = "COUNTRY", by.y = "UN_Code") %>% 
+  merge(., country, by.x = "COUNTRY", by.y = "UN_Code")
+FAO_raw$Name_En.y[FAO_raw$Name_En.y == "Un. Sov. Soc. Rep."] <- "Russian Federation"
+FAO_raw <- FAO_raw %>% 
   merge(., Rich_Shock_DATA, unique(Rich_Shock_DATA[,c(2,10,11)]), by.x = "Name_En.y", by.y = "Country", all.x = TRUE) %>% 
   filter(ENVIRONMENT == "3") %>% 
   filter(Major_Group == "PLANTAE AQUATICAE") %>% 
@@ -88,49 +92,166 @@ FAO_raw <- read_csv("TS_FI_AQUACULTURE.csv") %>%
   rename(Country = Name_En.y) %>% 
   select(Country, Genus, YEAR, QUANTITY, VALUE, Region, SubRegion) 
            
-
-## Rename Russia - More of this may be necessary
-FAO_raw$Country[FAO_raw$Country == "Un. Sov. Soc. Rep."] <- "Russian Federation"
 ```
 
 ```{r}
 ## Group data according to 'Quantity' field, by Year, Genus, and Country
+
+
 g_rates <- FAO_raw %>% 
-  select(YEAR, Genus, Country, VALUE, QUANTITY) %>% 
-  group_by(YEAR, Genus, Country) %>% 
+  mutate(Location = as.factor(Region)) %>%  ## or Country or SubRegion
+  select(YEAR, Genus, Location, VALUE, QUANTITY) %>% 
+  group_by(YEAR, Genus, Location) %>% 
   mutate_at(c("VALUE","QUANTITY"), sum) %>% 
   distinct()
 
-g_rates[is.na(g_rates)] <- 0
 
-mod <- g_rates %>% select(-VALUE) %>% rename(Metric = QUANTITY) %>% as_tsibble(index = YEAR, key = c("Genus", "Country")) %>% 
+
+sw <- g_rates %>% select(-VALUE) %>% rename(Metric = QUANTITY) %>% as_tsibble(index = YEAR, key = c("Genus", "Location")) %>% 
   fill_gaps()
 
+sw[is.na(sw)] <- 0
+sw <- sw %>% as_tsibble(index = YEAR, key = c("Genus", "Location"))
+
 ```
 
 
 ```{r}
-# Fit models
-fit <- model(mod, TSLM(Metric ~ trend()))
-fit <- mod %>% model(ets = ETS(box_cox(Metric,0.3)))
+# Examine for Stationarity
+tc = "EuCA"
+sp = "Phaeophyceae"
+
+sw %>% filter(Location == tc, Genus == sp) %>% 
+  autoplot(Metric)
+
+t_sw <- sw %>% filter(Location == tc, Genus == sp)
+
+t_sw %>% 
+  mutate(diff_Metric = difference(difference(Metric))) %>% 
+  features(diff_Metric, ljung_box, lag = 1)
+
+lambda <- t_sw %>%  
+  features(Metric, features = guerrero) %>% 
+  pull(lambda_guerrero)
+
+t_sw %>% 
+gg_tsdisplay(difference(difference(box_cox(Metric, lambda))), plot_type = 'partial')
+
+
+```
+
+
+```{r Explore models}
+##Safer to use stochastic trends for longer forecast horizons
+t_sw_fit <- t_sw %>% 
+  mutate(Metric = box_cox(Metric, lambda)) %>% 
+  model(
+  arima210 = ARIMA(Metric ~ pdq(2,1,0)),
+    arima011 = ARIMA(Metric ~ pdq(0,1,1)),
+    stepwise = ARIMA(Metric),
+    search = ARIMA(Metric, stepwise = FALSE)
+    
+  )
+## Want smallest AICc
+glance(t_sw_fit) %>% arrange(AICc)
+
+## Want all criteria met
+t_sw_fit %>% 
+  select(search) %>% 
+  gg_tsresiduals()
+
+## Want large p-value
+augment(t_sw_fit) %>%
+  filter(.model=='search') %>%
+  features(.innov, ljung_box, lag = 10, dof = 3)
+
+t_sw_fit %>%
+  forecast(h=32) %>%
+  filter(.model=='search') %>% 
+  autoplot(t_sw)
+
+
+t_sw <- t_sw %>% mutate(Metric = box_cox(Metric, lambda)) %>% 
+  slice(-n()) %>% 
+  stretch_tsibble(.init = 10) %>% 
+  mutate(Metric = box_cox(Metric, lambda)) %>% 
+  model(
+    stepwise = ARIMA(Metric),
+    ETS = ETS(Metric)
+    
+  ) %>% 
+  forecast(h = 1) %>% 
+  accuracy(t_sw)
+```
+
+```{r Fit models}
+
+fit <- sw %>% 
+  model(ARIMA(box_cox(Metric, lambda))) # this is for ETS-> ~ error("M") + trend("A") + season("N")
+            
+t_fit <- fit %>% filter(Location == tc, Genus == sp)
+
+
 # Compute forecasts
-fcast <- forecast(fit, h = "32 years", levels = 5) %>% 
-  arrange(Genus, Country)
+fcast <- forecast(fit, h = "32 years", level = 5) %>% 
+  arrange(Genus, Location)
+
+
+
+
+t_fcast <- fcast %>% filter(Location == tc, Genus == sp) 
+
+
+t_fcast %>% 
+autoplot() + 
+  geom_line(aes(y = Metric, col = "Data", group = Location), data = t_sw)
+
+t_fit %>% forecast(h = "32 years") %>% autoplot(t_sw)
+
+```
+
+
+
+
+```{r}
+## Diagnostics
+# Plot Residuals
+aug <- augment(t_fit) 
+autoplot(aug, .innov) +
+  labs(title = "Plot of residuals")
+aug %>%  features(.innov, box_pierce, lag = 10, dof =2)
+aug %>% features(.innov, ljung_box, lag = 10, dof =2)
+
+## Histogram
+aug %>% ggplot(aes(x = .innov)) +
+  geom_histogram() +
+  labs(title = "Histogram of residuals")
+
+t_fit %>% 
+  gg_tsresiduals()
+
+  
+report(fit %>% filter(Location == tc, Genus == sp))
+#components(fit %>% filter(Location == tc, Genus == sp)) %>%
+ # autoplot() +
+ # labs(title = "ETS(M,N,M) components")
+  
 ```
 
 
 ```{r}
-# Plot forecasts for one series
-tc = "Philippines"
-sp = "Eucheuma"
 
 
-ggplot(fcast %>% filter(Country == tc)
+#fcast %>% filter(Location == tc) %>% 
+#autoplot(sw) + 
+#  theme(legend.position = "none") + 
+#    scale_y_log10(limits = c(1,1e8), expand = c(0, 0))
+ggplot(fcast %>% filter(Location == tc)
        ,
-       aes(x=YEAR, y=Metric, fill = Country)) +
-  autolayer(fcast %>% filter(Country == tc), alpha = 0.2, .vars = .mean) +
-  geom_line(data = mod %>% filter(Country == tc), aes(x = YEAR, y = Metric, group = Genus)) +
- #facet_wrap(~ Country, scales = "free") + 
+       aes(x=YEAR, y=Metric, fill = Location)) +
+  autolayer(fcast %>% filter(Location == tc), alpha = 0.2, .vars = .mean, fcol = "black") +
+  geom_line(data = sw %>% filter(Location == tc), aes(x = YEAR, y = Metric, group = Genus)) +
+ #facet_wrap(~ Location, scales = "free") + 
     scale_y_log10(limits = c(1,1e8), expand = c(0, 0)) +
   theme(legend.position = "none") 
 ```
@@ -282,3 +403,6 @@ melt() %>%
   
 
 g_rates <- as.data.frame(g_rates)
+
+```
+
