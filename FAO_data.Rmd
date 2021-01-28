@@ -19,6 +19,7 @@ library(reshape2)
 library(gam)
 library(forecast)
 library(fable)
+library(fabletools)
 library(tsibble)
 library(lubridate)
 library(tis)
@@ -27,6 +28,7 @@ library(ggpubr)
 library(ggsci)
 library(stats)
 library(feasts)
+library(broom)
 ```
 
 
@@ -90,29 +92,57 @@ FAO_raw <- FAO_raw %>%
   filter(YEAR > 1970) %>% 
   mutate(Genus = word(Scientific_Name,1)) %>% 
   rename(Country = Name_En.y) %>% 
-  select(Country, Genus, YEAR, QUANTITY, VALUE, Region, SubRegion) 
+  select(Country, Genus, YEAR, QUANTITY, VALUE, Region, SubRegion)
+ FAO_raw <- filter(FAO_raw,!are_duplicated(FAO_raw, index= YEAR, key = c("Genus", "Country", "QUANTITY", "VALUE")))
            
 ```
 
 ```{r}
-## Group data according to 'Quantity' field, by Year, Genus, and Country
+## Group data according to 'Metric' field, by Year, Genus, and Country
+
+FAO_qua <- FAO_raw %>% 
+  select(-VALUE) %>% 
+  group_by(Genus,Country, YEAR, Region, SubRegion) %>% 
+  summarize(Metric = sum(QUANTITY, na.rm = TRUE)) %>% 
+  as_tsibble(index = YEAR, key = c("Genus", "Country", "Region", "SubRegion"))
+
+FAO_val <- FAO_raw %>% 
+  select(-QUANTITY) %>% 
+  group_by(Genus,Country, YEAR, Region, SubRegion) %>% 
+  summarize(Metric = sum(VALUE, na.rm = TRUE)) %>% 
+  as_tsibble(index = YEAR, key = c("Genus", "Country", "Region", "SubRegion"))
+
+sw_agg <- FAO_qua  %>% 
+  fill_gaps(.full = TRUE) %>% 
+  aggregate_key((Country/SubRegion/Region)*Genus, Metric = sum(Metric, na.rm = TRUE)) %>% 
+  arrange(Country)
+
+scan_gaps(sw_agg)
 
 
-g_rates <- FAO_raw %>% 
-  mutate(Location = as.factor(Region)) %>%  ## or Country or SubRegion
-  select(YEAR, Genus, Location, VALUE, QUANTITY) %>% 
-  group_by(YEAR, Genus, Location) %>% 
-  mutate_at(c("VALUE","QUANTITY"), sum) %>% 
-  distinct()
+sw_agg %>% as_tsibble() %>% 
+  filter(is_aggregated(Country), is_aggregated(Genus)) %>%
+  autoplot(Metric) +
+  theme(legend.position = "none")+
+   scale_y_log10(limits = c(1,1e8), expand = c(0, 0))
+```
+```{r}
+fit <- sw_agg %>% 
+  filter(YEAR<=2010) %>% 
+  model(base = ARIMA(Metric)) %>% 
+  reconcile(bu = bottom_up(base),
+            ols = min_trace(base, method = "ols"),
+           # mint = min_trace(base, method = "mint_shrink"),
+           )
+fc <- fit %>% forecast(h = "8 years")
 
-
-
-sw <- g_rates %>% select(-VALUE) %>% rename(Metric = QUANTITY) %>% as_tsibble(index = YEAR, key = c("Genus", "Location")) %>% 
-  fill_gaps()
-
-sw[is.na(sw)] <- 0
-sw <- sw %>% as_tsibble(index = YEAR, key = c("Genus", "Location"))
-
+fc %>% 
+  filter(is_aggregated(Region), is_aggregated(Genus)) %>% 
+  autoplot(
+    sw_agg %>% filter(YEAR>=2009),
+    level = NULL) +
+  facet_wrap(vars(Country), scales = "free_y"
+  )
 ```
 
 
@@ -153,7 +183,7 @@ t_sw_fit <- t_sw %>%
     
   )
 ## Want smallest AICc
-glance(t_sw_fit) %>% arrange(AICc)
+glance(t_sw_fit) %>% slice_max(AICc, n = 1, with_ties = FALSE)
 
 ## Want all criteria met
 t_sw_fit %>% 
@@ -185,6 +215,31 @@ t_sw <- t_sw %>% mutate(Metric = box_cox(Metric, lambda)) %>%
 ```
 
 ```{r Fit models}
+sw_gts <- sw %>% 
+  aggregate_key(Location*Genus)
+
+lambda <- sw %>% group_by(Genus, Location) %>% 
+  features(Metric, features = guerrero) 
+fit <- merge(sw, lambda, by = c("Genus", "Location")) %>% 
+  mutate(Metric = box_cox(Metric, lambda_guerrero)) %>% 
+  group_by(Genus, Location) %>% 
+  nest() %>% 
+  mutate(model = map(data, function(Metric) ARIMA(Metric, stepwise = FALSE)))
+
+fcast <- fit %>% 
+  mutate(fcast = map(model, predict))#forecast(h = "32 years", data = model)))
+    
+ 
+
+
+              
+      arima210 = ARIMA(Metric ~ pdq(2,1,0), data = .x),
+      arima011 = ARIMA(Metric ~ pdq(0,1,1),data = .x),
+      stepwise = ARIMA(Metric, data = .x),
+      search = ARIMA(Metric, stepwise = FALSE, data = .x)
+      ))# %>% 
+## Want smallest AICc
+glance(t_sw_fit) %>% slice_max(AICc, n = 1, with_ties = FALSE))
 
 fit <- sw %>% 
   model(ARIMA(box_cox(Metric, lambda))) # this is for ETS-> ~ error("M") + trend("A") + season("N")
@@ -196,7 +251,7 @@ t_fit <- fit %>% filter(Location == tc, Genus == sp)
 fcast <- forecast(fit, h = "32 years", level = 5) %>% 
   arrange(Genus, Location)
 
-
+sw$lambda_guerrero
 
 
 t_fcast <- fcast %>% filter(Location == tc, Genus == sp) 
