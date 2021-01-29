@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ---
 title: "LUC_Project"
 author: "Scott Spillias"
