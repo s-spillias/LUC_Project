@@ -125,6 +125,8 @@ sw_agg %>% as_tsibble() %>%
 ```
 
 ```{r}
+
+# this is a paragraph of aaepfkmsd and i hope it
 fit <- sw_agg %>% 
   filter(YEAR<=2018) %>% 
   model(ETS = ETS(Metric),
@@ -140,7 +142,7 @@ fc <- fit %>% forecast(h = "30 years")
 fc %>% 
   filter(!is_aggregated(Country), is_aggregated(Genus)) %>% 
   filter(Region == "East Asia") %>% 
-  #filter(!(.model %in% c("ols_E", "ols_A"))) %>% 
+  filter(!(.model %in% c("ols_E", "ols_A"))) %>% 
   autoplot(
     sw_agg %>% filter(YEAR>=1980), alpha = 0.7, level = 70) +
   facet_wrap(vars(Country), scales = "free_y"
