@@ -93,56 +93,67 @@ FAO_raw <- FAO_raw %>%
   mutate(Genus = word(Scientific_Name,1)) %>% 
   rename(Country = Name_En.y) %>% 
   select(Country, Genus, YEAR, QUANTITY, VALUE, Region, SubRegion)
- FAO_raw <- filter(FAO_raw,!are_duplicated(FAO_raw, index= YEAR, key = c("Genus", "Country", "QUANTITY", "VALUE")))
+ FAO_raw <- filter(FAO_raw,!are_duplicated(FAO_raw, index= YEAR, key = c("Genus", "Country", "QUANTITY", "VALUE"))) %>% 
+   mutate(PRICE = VALUE/QUANTITY)
            
 ```
 
 ```{r}
 ## Group data according to 'Metric' field, by Year, Genus, and Country
 
-FAO_qua <- FAO_raw %>% 
-  select(-VALUE) %>% 
+
+FAO_met <- FAO_raw %>% 
+  mutate(Metric = QUANTITY) %>%  ### Choose HERE: VALUE, QUANTITY, PRICE
+  select(-VALUE, -QUANTITY, -PRICE) %>% 
   group_by(Genus,Country, YEAR, Region, SubRegion) %>% 
-  summarize(Metric = sum(QUANTITY, na.rm = TRUE)) %>% 
+  summarize(Metric = sum(Metric, na.rm = TRUE)) %>% 
   as_tsibble(index = YEAR, key = c("Genus", "Country", "Region", "SubRegion"))
 
-FAO_val <- FAO_raw %>% 
-  select(-QUANTITY) %>% 
-  group_by(Genus,Country, YEAR, Region, SubRegion) %>% 
-  summarize(Metric = sum(VALUE, na.rm = TRUE)) %>% 
-  as_tsibble(index = YEAR, key = c("Genus", "Country", "Region", "SubRegion"))
-
-sw_agg <- FAO_qua  %>% 
+sw_agg <- FAO_met  %>% 
   fill_gaps(.full = TRUE) %>% 
-  aggregate_key((Country/SubRegion/Region)*Genus, Metric = sum(Metric, na.rm = TRUE)) %>% 
-  arrange(Country)
+  aggregate_key((Country/SubRegion/Region)*Genus, Metric = sum(Metric, na.rm = TRUE)) 
 
 scan_gaps(sw_agg)
 
 
 sw_agg %>% as_tsibble() %>% 
-  filter(is_aggregated(Country), is_aggregated(Genus)) %>%
+  filter(is_aggregated(Country), !is_aggregated(Genus)) %>%
   autoplot(Metric) +
   theme(legend.position = "none")+
    scale_y_log10(limits = c(1,1e8), expand = c(0, 0))
 ```
+
 ```{r}
 fit <- sw_agg %>% 
-  filter(YEAR<=2010) %>% 
-  model(base = ARIMA(Metric)) %>% 
-  reconcile(bu = bottom_up(base),
-            ols = min_trace(base, method = "ols"),
-           # mint = min_trace(base, method = "mint_shrink"),
+  filter(YEAR<=2018) %>% 
+  model(ETS = ETS(Metric),
+        ARIMA = ARIMA(Metric)) %>% 
+  reconcile(bu_E = bottom_up(ETS),
+            ols_E = min_trace(ETS, method = "ols"),
+            bu_A = bottom_up(ARIMA),
+            ols_A = min_trace(ARIMA, method = "ols")
+           # mint = min_trace(base, method = "mint_shrink")
            )
-fc <- fit %>% forecast(h = "8 years")
+fc <- fit %>% forecast(h = "30 years")
 
 fc %>% 
-  filter(is_aggregated(Region), is_aggregated(Genus)) %>% 
+  filter(!is_aggregated(Country), is_aggregated(Genus)) %>% 
+  filter(Region == "East Asia") %>% 
+  filter(!(.model %in% c("ols_E", "ols_A"))) %>% 
   autoplot(
-    sw_agg %>% filter(YEAR>=2009),
-    level = NULL) +
+    sw_agg %>% filter(YEAR>=1980), alpha = 0.7, level = 70) +
   facet_wrap(vars(Country), scales = "free_y"
   )
+
+fc %>% filter(is_aggregated(Region), is_aggregated(Genus)) %>% 
+  accuracy(
+    data = sw_agg, 
+    measures = list(rmse = RMSE, mase = MASE)
+  ) %>% 
+  group_by(.model) %>% 
+  summarise(rmse = mean(rmse), mase = mean(mase))
+  
+  
 ```
 
 
