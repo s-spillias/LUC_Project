@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
 ---
 title: "LUC_Project"
 author: "Scott Spillias"
@@ -127,6 +125,8 @@ sw_agg %>% as_tsibble() %>%
 ```
 
 ```{r}
+
+# this is a paragraph of aaepfkmsd and i hope it
 fit <- sw_agg %>% 
   filter(YEAR<=2018) %>% 
   model(ETS = ETS(Metric),
@@ -474,3 +474,4 @@ melt() %>%
 g_rates <- as.data.frame(g_rates)
 
 ```
+
