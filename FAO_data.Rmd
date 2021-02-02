@@ -125,14 +125,31 @@ sw_agg %>% as_tsibble() %>%
 
 corr <- sw_agg %>% as_tsibble() %>% 
   filter(!is_aggregated(Country), !is_aggregated(Major_Group), is_aggregated(Genus)) %>% 
+  as_tibble() %>% 
   select(-Genus) %>% 
-  arrange(Country)
+  arrange(Country) %>% 
+  mutate(across(c(2:5),as.factor))
 
-  ggplot(data = as.data.frame(corr), aes(x = YEAR, y = Metric, group = Major_Group)) +
-  geom_line() +
+corr_nested <- corr %>% 
+  pivot_wider(names_from = Major_Group, values_from = Metric) %>% 
+  drop_na() %>% 
+  group_by(Country) %>% 
+  rename(Plants = `PLANTAE AQUATICAE`,
+         Bivalves = MOLLUSCA) %>% 
+  nest() %>% 
+  mutate(model = map(data, ~cor.test(.x$Plants, .x$Bivalves, method = "spearman")),
+         tidied = map(model,tidy)) %>% 
+  unnest(tidied)
+
+corr %>% 
+  #filter(Country == "Philippines") %>% 
+  ggplot(aes(x = YEAR, y = Metric, colour = Major_Group)) +
+  geom_point() +
   scale_colour_hue(name = "Major_Group") +
-  facet_wrap(~Country, scales = "free_y") +
-  theme(legend.position = "none")
+  facet_wrap(~Country, scales = "free_y")   +
+ # theme(legend.position = "none")+
+  scale_y_log10(limits = c(1,1e8), expand = c(0, 0)) +
+  theme(axis.text.y = element_blank())
 ```
 
 ```{r}
