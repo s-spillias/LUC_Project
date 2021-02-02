@@ -76,8 +76,8 @@ cbPalette <- c("#F00011", "#CC79A7", "#56B4E9", "#F0E442","#009E73", "#0072B2", 
 
 ```
 
-```{r}
-## IMPORT AND clean DATA
+```{r, IMPORT AND clean Data, message= FALSE}
+
 groups <- read_csv("CL_FI_SPECIES_GROUPS.csv")
 env <- read_csv("CL_FI_ENVIRONMENT.csv")
 country <- read_csv("CL_FI_COUNTRY_GROUPS.csv")
@@ -89,11 +89,11 @@ FAO_raw$Name_En.y[FAO_raw$Name_En.y == "Un. Sov. Soc. Rep."] <- "Russian Federat
 FAO_raw <- FAO_raw %>% 
   merge(., Rich_Shock_DATA, unique(Rich_Shock_DATA[,c(2,10,11)]), by.x = "Name_En.y", by.y = "Country", all.x = TRUE) %>% 
   filter(ENVIRONMENT == "3") %>% 
-  filter(Major_Group == "PLANTAE AQUATICAE") %>% 
+  filter(Major_Group == c("MOLLUSCA", "PLANTAE AQUATICAE")) %>% 
   filter(YEAR > 1970) %>% 
   mutate(Genus = word(Scientific_Name,1)) %>% 
   rename(Country = Name_En.y) %>% 
-  select(Country, Genus, YEAR, QUANTITY, VALUE, Region, SubRegion)
+  select(Country, Genus, Major_Group, YEAR, QUANTITY, VALUE, Region, SubRegion)
  FAO_raw <- filter(FAO_raw,!are_duplicated(FAO_raw, index= YEAR, key = c("Genus", "Country", "QUANTITY", "VALUE"))) %>% 
    mutate(PRICE = VALUE/QUANTITY)
            
@@ -106,22 +106,33 @@ FAO_raw <- FAO_raw %>%
 FAO_met <- FAO_raw %>% 
   mutate(Metric = QUANTITY) %>%  ### Choose HERE: VALUE, QUANTITY, PRICE
   select(-VALUE, -QUANTITY, -PRICE) %>% 
-  group_by(Genus,Country, YEAR, Region, SubRegion) %>% 
+  group_by(Genus, Major_Group, Country, YEAR, Region, SubRegion) %>% 
   summarize(Metric = sum(Metric, na.rm = TRUE)) %>% 
-  as_tsibble(index = YEAR, key = c("Genus", "Country", "Region", "SubRegion"))
+  as_tsibble(index = YEAR, key = c("Genus","Major_Group", "Country", "Region", "SubRegion"))
 
 sw_agg <- FAO_met  %>% 
   fill_gaps(.full = TRUE) %>% 
-  aggregate_key((Country/SubRegion/Region)*Genus, Metric = sum(Metric, na.rm = TRUE)) 
+  aggregate_key((Region/SubRegion/Country)*(Major_Group/Genus), Metric = sum(Metric, na.rm = TRUE)) 
 
 scan_gaps(sw_agg)
 
 
 sw_agg %>% as_tsibble() %>% 
-  filter(is_aggregated(Country), !is_aggregated(Genus)) %>%
+  filter(Country == "China", !is_aggregated(Major_Group), is_aggregated(Genus)) %>% 
   autoplot(Metric) +
-  theme(legend.position = "none")+
-   scale_y_log10(limits = c(1,1e8), expand = c(0, 0))
+  theme(legend.position = "none") #+
+  # scale_y_log10(limits = c(1,1e8), expand = c(0, 0))
+
+corr <- sw_agg %>% as_tsibble() %>% 
+  filter(!is_aggregated(Country), !is_aggregated(Major_Group), is_aggregated(Genus)) %>% 
+  select(-Genus) %>% 
+  arrange(Country)
+
+  ggplot(data = as.data.frame(corr), aes(x = YEAR, y = Metric, group = Major_Group)) +
+  geom_line() +
+  scale_colour_hue(name = "Major_Group") +
+  facet_wrap(~Country, scales = "free_y") +
+  theme(legend.position = "none")
 ```
 
 ```{r}
