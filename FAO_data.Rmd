@@ -12,7 +12,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-```{r}
+```{r, Load Libraries, message = FALSE}
 library(tidyverse)
 library(readxl)
 library(reshape2)
@@ -33,7 +33,7 @@ library(broom)
 ```
 
 
-```{r import FAO Data}
+```{r import FAO Data, message=FALSE, warning=FALSE}
 
 FAO_Data <- read_excel("FAO_Data.xlsx", 
     sheet = "Sheet2")
@@ -125,8 +125,6 @@ sw_agg %>% as_tsibble() %>%
 ```
 
 ```{r}
-
-# this is a paragraph of aaepfkmsd and i hope it
 fit <- sw_agg %>% 
   filter(YEAR<=2018) %>% 
   model(ETS = ETS(Metric),
